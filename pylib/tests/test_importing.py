@@ -331,3 +331,161 @@ def test_mnemo():
     assert "a_longer_tag" in col.tags.all()
     assert col.db.scalar(f"select count() from cards where type = {CARD_TYPE_NEW}") == 1
     col.close()
+
+def test_importNotes_add_new_note():
+    from anki.importing.noteimp import NoteImporter, ForeignNote
+    from .shared import getEmptyCol
+
+    col = getEmptyCol()
+    model = col.models.current()
+    # Garante que o modelo tem pelo menos dois campos
+    if len(model["flds"]) < 2:
+        col.models.addField(model, col.models.new_field("Extra"))
+        col.models.save(model)
+    
+    class SimpleImporter(NoteImporter):
+        def fields(self):
+            return 2
+        def foreignNotes(self):
+            note = ForeignNote()
+            note.fields = ["Campo1", "Campo2"]
+            note.tags = ["tag1"]
+            note.fieldsStr = "Campo1\x1fCampo2"
+            return [note]
+
+    importer = SimpleImporter(col, "dummy")
+    importer.initMapping()
+    importer.importNotes(importer.foreignNotes())
+    # Deve adicionar uma nota
+    assert col.note_count() == 1
+    note = col.get_note(col.db.scalar("select id from notes"))
+    assert note.fields[0] == "Campo1"
+    assert note.fields[1] == "Campo2"
+
+def test_importNotes_empty_first_field():
+    from anki.importing.noteimp import NoteImporter, ForeignNote
+    from .shared import getEmptyCol
+
+    col = getEmptyCol()
+    model = col.models.current()
+    if len(model["flds"]) < 2:
+        col.models.addField(model, col.models.new_field("Extra"))
+        col.models.save(model)
+    
+    class SimpleImporter(NoteImporter):
+        def fields(self):
+            return 2
+        def foreignNotes(self):
+            note = ForeignNote()
+            note.fields = ["", "Campo2"]
+            note.tags = ["tag1"]
+            note.fieldsStr = "\x1fCampo2"
+            return [note]
+
+    importer = SimpleImporter(col, "dummy")
+    importer.initMapping()
+    importer.importNotes(importer.foreignNotes())
+    # Não deve adicionar nenhuma nota
+    assert col.note_count() == 0
+    assert any("primeiro campo" in log for log in importer.log)
+
+def test_importNotes_duplicate_in_file_ignore_mode():
+    from anki.importing.noteimp import NoteImporter, ForeignNote, IGNORE_MODE
+    from .shared import getEmptyCol
+
+    col = getEmptyCol()
+    model = col.models.current()
+    if len(model["flds"]) < 2:
+        col.models.addField(model, col.models.new_field("Extra"))
+        col.models.save(model)
+    
+    class SimpleImporter(NoteImporter):
+        def fields(self):
+            return 2
+        def foreignNotes(self):
+            note1 = ForeignNote()
+            note1.fields = ["Campo1", "Campo2"]
+            note1.tags = ["tag1"]
+            note1.fieldsStr = "Campo1\x1fCampo2"
+            note2 = ForeignNote()
+            note2.fields = ["Campo1", "Outro"]
+            note2.tags = ["tag2"]
+            note2.fieldsStr = "Campo1\x1fOutro"
+            return [note1, note2]
+
+    importer = SimpleImporter(col, "dummy")
+    importer.initMapping()
+    importer.importMode = IGNORE_MODE
+    importer.importNotes(importer.foreignNotes())
+    # Só uma nota deve ser adicionada
+    assert col.note_count() == 1
+    assert any("apareceu duas vezes" in log or "duplicado" in log for log in importer.log)
+
+
+def test_importNotes_duplicate_in_db_update_mode():
+    from anki.importing.noteimp import NoteImporter, ForeignNote, UPDATE_MODE
+    from .shared import getEmptyCol
+
+    col = getEmptyCol()
+    model = col.models.current()
+    if len(model["flds"]) < 2:
+        col.models.addField(model, col.models.new_field("Extra"))
+        col.models.save(model)
+    # Adiciona nota inicial
+    n = col.newNote()
+    n.fields[0] = "Campo1"
+    n.fields[1] = "Campo2"
+    col.addNote(n)
+    
+    class SimpleImporter(NoteImporter):
+        def fields(self):
+            return 2
+        def foreignNotes(self):
+            note = ForeignNote()
+            note.fields = ["Campo1", "NovoValor"]
+            note.tags = ["tag1"]
+            note.fieldsStr = "Campo1\x1fNovoValor"
+            return [note]
+
+    importer = SimpleImporter(col, "dummy")
+    importer.initMapping()
+    importer.importMode = UPDATE_MODE
+    importer.importNotes(importer.foreignNotes())
+    # Deve atualizar a nota existente
+    note = col.get_note(col.db.scalar("select id from notes"))
+    assert note.fields[1] == "NovoValor"
+    assert any("primeiro campo correspondeu" in log or "atualizada" in log for log in importer.log)
+
+
+def test_importNotes_add_mode_allows_duplicates():
+    from anki.importing.noteimp import NoteImporter, ForeignNote, ADD_MODE
+    from .shared import getEmptyCol
+
+    col = getEmptyCol()
+    model = col.models.current()
+    if len(model["flds"]) < 2:
+        col.models.addField(model, col.models.new_field("Extra"))
+        col.models.save(model)
+    # Adiciona nota inicial
+    n = col.newNote()
+    n.fields[0] = "Campo1"
+    n.fields[1] = "Campo2"
+    col.addNote(n)
+    
+    class SimpleImporter(NoteImporter):
+        def fields(self):
+            return 2
+        def foreignNotes(self):
+            note = ForeignNote()
+            note.fields = ["Campo1", "OutroValor"]
+            note.tags = ["tag1"]
+            note.fieldsStr = "Campo1\x1fOutroValor"
+            return [note]
+
+    importer = SimpleImporter(col, "dummy")
+    importer.initMapping()
+    importer.importMode = ADD_MODE
+    importer.importNotes(importer.foreignNotes())
+    # Deve permitir duplicidade
+    assert col.note_count() == 2
+    assert any("duplicado" in log or "adicionado" in log for log in importer.log)
