@@ -1121,3 +1121,24 @@ $(function () {
             return ", ".join(vals)
         except ZeroDivisionError:
             return ""
+
+from typing import List
+
+class StreakTracker:
+    def __init__(self, daily_goal, history):
+        self.daily_goal = daily_goal
+        self.history = history
+
+    def average(self):
+        if not self.history:
+            return 0
+        return sum(self.history) // len(self.history)
+
+    def is_on_track(self):
+        return self.average() >= self.daily_goal
+
+    def progress_percentage(self):
+        if self.daily_goal == 0:
+            return 0
+        perc = round((self.average() / self.daily_goal) * 100)
+        return perc if perc <= 100 else 100
